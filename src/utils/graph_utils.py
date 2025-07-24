@@ -184,7 +184,7 @@ def web_answer_node(state):
 
 def adonis_answer_node(state):
     print("------ENTERING: ADONIS ANSWER NODE------")
-    tools = [graph_tool, adonis_graph_retriever_tool]
+    tools = [graph_tool]
     generate_agent = get_react_agent(
         llm,
         tools,
