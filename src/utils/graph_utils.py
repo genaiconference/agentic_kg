@@ -1,33 +1,28 @@
 import os
+import json
+import neo4j
 import operator
 from typing import Annotated
 from dotenv import load_dotenv
-from langchain.tools import tool
 from langgraph.graph import StateGraph
 from typing_extensions import TypedDict
 from langchain_openai import AzureChatOpenAI
-from langchain_openai import AzureOpenAIEmbeddings
 from src.utils.agentic_utils import get_react_agent
-from langchain_community.tools import DuckDuckGoSearchRun
-from langchain.tools.retriever import create_retriever_tool
 from langchain_community.callbacks import get_openai_callback
-from langchain_community.vectorstores.neo4j_vector import Neo4jVector
 from langchain_core.messages import AnyMessage, HumanMessage, AIMessage
-from src.utils.prompt_utils import(
-    DG_REACT_PROMPT,
-    SYSTEM_PROMPT,
-    WEB_Special_Instructions,
-    General_Instructions,
-    cypher_generation_template,
-    qa_generation_template_str)
-
-
-from langchain.prompts import (
-    PromptTemplate
-)
-
-from langchain_community.graphs import Neo4jGraph
-from langchain.chains import GraphCypherQAChain
+from langchain.tools import Tool
+from langchain_core.tools import tool
+from neo4j_graphrag.schema import get_schema
+from neo4j_graphrag.llm import AzureOpenAILLM
+from neo4j_graphrag.embeddings.openai import AzureOpenAIEmbeddings
+from neo4j_graphrag.retrievers import HybridCypherRetriever, Text2CypherRetriever
+from neo4j_graphrag.types import RetrieverResultItem
+from neo4j_graphrag.generation import GraphRAG, RagTemplate
+from src.utils.examples import examples
+from src.utils.prompt_utils import(custom_text2cypher_prompt,
+                                   rag_prompt,
+                                   CYPHER_REACT_PROMPT,
+                                   REACT_PROMPT)
 
 load_dotenv()
 
@@ -41,7 +36,25 @@ NEO4J_URI = os.getenv("NEO4J_URI")
 NEO4J_USER = os.getenv("NEO4J_USERNAME")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
 
-llm = AzureChatOpenAI(
+neo4j_answering_llm = AzureOpenAILLM(
+    model_name=DEPLOYMENT_NAME,
+    model_params={
+        "temperature": 0,  # for deterministic output (optional)
+    },
+    azure_endpoint=API_BASE,
+    api_version=API_VERSION,
+    api_key=API_KEY
+)
+
+neo4j_embedder = AzureOpenAIEmbeddings(
+    model=EMBEDDING_DEPLOYMENT_NAME,
+    api_key=API_KEY,
+    azure_endpoint=API_BASE,
+    api_version=API_VERSION,
+    azure_deployment=EMBEDDING_DEPLOYMENT_NAME
+)
+
+lang_llm = AzureChatOpenAI(
     azure_endpoint=API_BASE,
     openai_api_version=API_VERSION,
     deployment_name=DEPLOYMENT_NAME,
@@ -51,166 +64,142 @@ llm = AzureChatOpenAI(
     temperature=0
 )
 
-embedding_model = AzureOpenAIEmbeddings(
-    azure_deployment=EMBEDDING_DEPLOYMENT_NAME,
-    openai_api_key=API_KEY,
-    azure_endpoint=API_BASE,
-    openai_api_version=API_VERSION,
-)
-
-
 class GraphState(TypedDict):
     question: str
     final_answer: str
     conversation_history: Annotated[list[AnyMessage], operator.add]
 
-graph = Neo4jGraph(
-    url=NEO4J_URI,
-    username=NEO4J_USER,
-    password=NEO4J_PASSWORD,
-)
+driver = neo4j.GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
-vectorstore = Neo4jVector.from_existing_graph(
-    embedding=embedding_model,
-    url=NEO4J_URI,
-    username=NEO4J_USER,
-    password=NEO4J_PASSWORD,
-    index_name="adonis_embedding_index",
-    node_label="Searchable",
-    text_node_properties=["name", "description"],
-    embedding_node_property="embedding",
-    distance_strategy="COSINE"
-)
-retriever = vectorstore.as_retriever(
-    search_type="similarity",
-    search_kwargs={
-        "k": 5,
-        "filter": {}
-    }
-)
+INDEX_NAME = "entity_vector_index"
+FULLTEXT_INDEX_NAME = "entity_fulltext_index"
 
-adonis_graph_retriever_tool = create_retriever_tool(
-    retriever=retriever,
-    name="adonis_semantic_graph_search",
-    description="Use this tool to answer the questions regarding the process involved in the finance core with flow charts. **Use this tool mainly for descriptive based questions**"
-)
-cypher_generation_prompt = PromptTemplate(
-    input_variables=["schema", "question"],
-    template=cypher_generation_template
-)
-qa_generation_prompt = PromptTemplate(
-    input_variables=["context", "question"], template=qa_generation_template_str
-)
-cypher_chain = GraphCypherQAChain.from_llm(
-    top_k=10,
-    graph=graph,
-    verbose=True,
-    validate_cypher=True,
-    qa_prompt=qa_generation_prompt,
-    cypher_prompt=cypher_generation_prompt,
-    qa_llm=llm,
-    cypher_llm=llm,
-    allow_dangerous_requests=True
-)
+def result_formatter_dynamic(record):
+    data = record.data()
+    node_props = dict(list(data.values())[0]) if len(data) == 1 and isinstance(list(data.values())[0], dict) else dict(data)
+    content = "\n".join(f"{k}: {v}" for k, v in node_props.items())
 
+    return RetrieverResultItem(
+        content=content.strip(),
+        metadata={
+            "raw_properties": node_props,
+            "score": record.get("score"),
+            "node_keys": list(node_props.keys())
+        }
+    )
 
-@tool("graph_tool", return_direct=False)
-def graph_tool(query: str) -> str:
-    """Use this tool when the user asks a question that requires querying structured information
-    from a Neo4j graph database. Ideal for answering questions related to relationships,
-    hierarchies, dependencies, connections between entities, or insights stored in the graph.
+@tool("text2cypher_tool", description="Convert natural language query to Cypher.")
+def text2cypher_tool(query: str) -> str:
+    text2cypher = Text2CypherRetriever(
+        driver=driver,
+        llm=neo4j_answering_llm,
+        neo4j_schema=get_schema(driver),
+        custom_prompt=custom_text2cypher_prompt,
+        examples=examples
+    )
+    result = text2cypher.search(query)
+    return result.metadata["cypher"]
 
-    The graph contains entities such as:
-    - Steps (which belong to process diagrams)
-    - Process Diagrams (which are grouped under Subprocess Areas → Process Areas → Functions)
-    - Roles (responsible or accountable for executing specific steps)
-    - NFCM Controls (linked to steps via 'INVOLVED_IN' relationships)
-    - Inter-diagram references (e.g., 'REFERENCED_EVENT', 'CROSS_REFERENCE', 'REFERENCED_SUBPROCESS')
+def get_rag_for_query(query: str, cypher_query: str):
+    retriever = HybridCypherRetriever(
+        driver=driver,
+        vector_index_name=INDEX_NAME,
+        fulltext_index_name=FULLTEXT_INDEX_NAME,
+        retrieval_query=cypher_query,
+        embedder=neo4j_embedder,
+        result_formatter=result_formatter_dynamic,
+    )
 
-    Use this tool when:
-    - The user asks about who is responsible or accountable for a particular step or process
-    - The question involves business process hierarchies, functional areas, or diagram structure
-    - The user wants to find controls implemented in a process or step
-    - The query relates to semantic or relational search across roles, functions, controls, or process flows
-    - You need to traverse relationships or analyze dependencies (e.g., which diagrams a step connects to)
+    prompt_template = RagTemplate(
+        template=rag_prompt,
+        expected_inputs=["context", "query_text"]
+    )
 
-    Avoid using this tool for:
-    - General or factual knowledge unrelated to business processes or the graph
-    - Questions that don't require traversing or querying the graph database
+    rag = GraphRAG(retriever=retriever, llm=neo4j_answering_llm, prompt_template=prompt_template)
 
-    Always prefer this tool if the user query involves understanding structured workflows, responsibilities or control frameworks within a business process.
-	"""
-    response = cypher_chain.invoke(query)
+    response = rag.search(
+        query,
+        return_context=True,
+        retriever_config={'top_k': 20},
+        response_fallback="I can't answer this question without context"
+    )
 
-    return response.get("result")
+    for i, item in enumerate(response.retriever_result.items, 1):
+        print(f"🔎 Context Item {i}:\n📄 {item.content}\n📘 {item.metadata}\n---\n")
+
+    return response.answer
 
 
-@tool(description="Use this tool to answer latest happenings from internet")
-def web_tool(query):
+def hybrid_tool_wrapper(input_str: str) -> str:
     try:
-        # Custom wrapper with region and max results
-        search_tool = DuckDuckGoSearchRun(requests_kwargs={"verify": False})
-        # Search for news
-        return search_tool.invoke(query)
-    except:
-        print("Encountered Issue! Please try again!")
+        parsed = json.loads(input_str)
+        query = parsed["query"]
+        cypher_query = parsed["cypher_query"]
+        return get_rag_for_query(query, cypher_query)
+    except Exception as e:
+        return f"Failed to parse input: {e}"
 
 
-def web_answer_node(state):
-    print(state)
-    print("------ENTERING: WEB ANSWER NODE------")
-    tools = [web_tool]
-    generate_agent = get_react_agent(
-        llm,
-        tools,
-        DG_REACT_PROMPT,
-        verbose=True,
+av_hybrid_tool = Tool(
+    name="AVVectorRetrieval",
+    func=hybrid_tool_wrapper,
+    description=(
+        "Use this tool to answer questions about the Analytics Vidhya DataHack Summit. "
+        "Input should be a JSON object with 'query' and 'cypher_query' keys, e.g.: "
+        '{"query": "List speakers", "cypher_query": "MATCH (s:Speaker)..."}'
     )
-    with get_openai_callback() as cb:
-        answer = generate_agent.invoke(
-            {
-                "input": state["question"],
-                "conversation_history": state["conversation_history"],
-                "SYSTEM_PROMPT": SYSTEM_PROMPT,
-                "GENERAL_INSTRUCTIONS": General_Instructions,
-                "SPECIAL_INSTRUCTIONS": WEB_Special_Instructions,
-            }
-        )
+)
 
-    return {"conversation_history": [HumanMessage(content=state["question"]),
-                                     AIMessage(content=answer["output"])],
-            "final_answer": answer["output"]}
+def av_answer_node(state):
+    print("------ENTERING: AV HYBRID ANSWER NODE------")
 
-
-def adonis_answer_node(state):
-    print("------ENTERING: ADONIS ANSWER NODE------")
-    tools = [graph_tool]
-    generate_agent = get_react_agent(
-        llm,
-        tools,
-        DG_REACT_PROMPT,
-        verbose=True,
+    # Step 1: Generate Cypher
+    cypher_agent = get_react_agent(
+        lang_llm,
+        [text2cypher_tool],
+        CYPHER_REACT_PROMPT,
+        verbose=True
     )
-    with get_openai_callback() as cb:
-        answer = generate_agent.invoke(
-            {
-                "input": state["question"],
-                "conversation_history": state["conversation_history"],
-                "SYSTEM_PROMPT": SYSTEM_PROMPT,
-                "GENERAL_INSTRUCTIONS": General_Instructions,
-                "SPECIAL_INSTRUCTIONS": WEB_Special_Instructions,
-            }
-        )
 
-    return {"conversation_history": [HumanMessage(content=state["question"]),
-                                     AIMessage(content=answer["output"])],
-            "final_answer": answer["output"]}
+    cypher_result = cypher_agent.invoke({
+        "input": state["question"],
+        "schema": get_schema(driver)
+    })
+
+    cypher_query = cypher_result["output"].strip().strip("'\"")
+
+    # Step 2: Run Hybrid Agent with Cypher
+    hybrid_agent = get_react_agent(
+        lang_llm,
+        [av_hybrid_tool],
+        REACT_PROMPT,
+        verbose=True
+    )
+
+    hybrid_input = {
+        "query": state["question"],
+        "cypher_query": cypher_query
+    }
+
+    with get_openai_callback() as cb:
+        answer = hybrid_agent.invoke({
+            "input": json.dumps(hybrid_input),
+            "conversation_history": state["conversation_history"],
+        })
+
+    return {
+        "conversation_history": [
+            HumanMessage(content=state["question"]),
+            AIMessage(content=answer["output"])
+        ],
+        "final_answer": answer["output"]
+    }
 
 
 def _create_graph_builder():
     # Set up the state graph
     builder = StateGraph(GraphState)
-    builder.add_node("answer_node", adonis_answer_node)
+    builder.add_node("answer_node", av_answer_node)
     builder.set_entry_point("answer_node")
     builder.set_finish_point("answer_node")
 

@@ -21,3 +21,15 @@ langgraph-checkpoint-sqlite==2.0.5
 pydantic==2.10.6
 pydantic-settings==2.9.1
 pydantic_core==2.27.2
+neo4j==5.28.1
+neo4j_graphrag==1.8.0
+rapidfuzz==3.13.0
+fsspec>=2024.9.0,<2025.0.0
+json-repair>=0.39.1,<0.40.0
+pypdf>=5.1.0,<6.0.0
+types-pyyaml>=6.0.12.20240917,<7.0.0.0
+pytz==2025.2
+numpy>=2.0.0,<3.0.0
+pydantic>=2.6.3,<3.0.0
+pyyaml>=6.0.2,<7.0.0
+scipy>=1.13.0,<2.0.0
