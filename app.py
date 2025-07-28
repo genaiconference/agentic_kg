@@ -1,6 +1,8 @@
+import re
 import chainlit as cl
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langchain.schema.runnable.config import RunnableConfig
 
 from src.utils.graph_utils import _create_graph_builder
@@ -14,25 +16,34 @@ async def on_message(msg: cl.Message):
         stream_final_answer=True,
         answer_prefix_tokens=answer_prefix_tokens,)
     final_answer = cl.Message(content="")
-
+    question = msg.content
     inputs = {
         "question": msg.content
     }
     builder = _create_graph_builder()
-
-    with SqliteSaver.from_conn_string(":memory:") as memory:
+    buffer = ""
+    streaming = False
+    async with AsyncSqliteSaver.from_conn_string(":memory:") as memory:
         graph_with_memory = builder.compile(checkpointer=memory)
-        for msg, metadata in graph_with_memory.stream(inputs,
-                                                      stream_mode="messages",
-                                                      config=RunnableConfig(callbacks=[cb], **config)):
-            print("-------------")
-            print(msg)
-            if (
-                    msg.content
-                    and not isinstance(msg, HumanMessage)
-                    and metadata["langgraph_node"] == "answer_node"
-            ):
-                await final_answer.stream_token(msg.content)
+        async for msg, metadata in graph_with_memory.astream(inputs,
+                                                              stream_mode="messages",
+                                                              config=RunnableConfig(callbacks=[cb], **config)):
+            identifier = metadata.get("langgraph_node")
+            content = msg.content
+            print(f"----------{content}")
+            if not streaming:
+                buffer += content
+                print(f"############{buffer}")
+                match = re.search(
+                    r"Final\s+Answer\s*:\s*", buffer, re.IGNORECASE
+                )
+                if match:
+                    streaming = True
+                else:
+                    continue
+            if content == question:
+                continue
+            await final_answer.stream_token(content)
 
     await final_answer.send()
 

@@ -16,6 +16,7 @@ from langchain_core.messages import AnyMessage, HumanMessage, AIMessage
 from src.utils.prompt_utils import(
     DG_REACT_PROMPT,
     SYSTEM_PROMPT,
+    Adonis_Special_Instructions,
     WEB_Special_Instructions,
     General_Instructions,
     cypher_generation_template,
@@ -62,7 +63,7 @@ embedding_model = AzureOpenAIEmbeddings(
 class GraphState(TypedDict):
     question: str
     final_answer: str
-    conversation_history: Annotated[list[AnyMessage], operator.add]
+    conversation_history: Annotated[list[AnyMessage], operator.add] #InMemoryMessageHistory()
 
 graph = Neo4jGraph(
     url=NEO4J_URI,
@@ -184,7 +185,7 @@ def web_answer_node(state):
 
 def adonis_answer_node(state):
     print("------ENTERING: ADONIS ANSWER NODE------")
-    tools = [graph_tool]
+    tools = [graph_tool, adonis_graph_retriever_tool]
     generate_agent = get_react_agent(
         llm,
         tools,
@@ -198,7 +199,7 @@ def adonis_answer_node(state):
                 "conversation_history": state["conversation_history"],
                 "SYSTEM_PROMPT": SYSTEM_PROMPT,
                 "GENERAL_INSTRUCTIONS": General_Instructions,
-                "SPECIAL_INSTRUCTIONS": WEB_Special_Instructions,
+                "SPECIAL_INSTRUCTIONS": Adonis_Special_Instructions,
             }
         )
 
