@@ -5,7 +5,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langchain.schema.runnable.config import RunnableConfig
 
-from src.utils.graph_utils import _create_graph_builder
+from src.utils.av_graph_utils import _create_graph_builder
 
 
 @cl.on_message
@@ -28,7 +28,6 @@ async def on_message(msg: cl.Message):
         async for msg, metadata in graph_with_memory.astream(inputs,
                                                               stream_mode="messages",
                                                               config=RunnableConfig(callbacks=[cb], **config)):
-            identifier = metadata.get("langgraph_node")
             content = msg.content
             print(f"----------{content}")
             if not streaming:

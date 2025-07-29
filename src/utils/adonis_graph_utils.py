@@ -11,6 +11,9 @@ from src.utils.agentic_utils import get_react_agent
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain.tools.retriever import create_retriever_tool
 from langchain_community.callbacks import get_openai_callback
+from langchain.prompts import PromptTemplate
+from langchain_community.graphs import Neo4jGraph
+from langchain.chains import GraphCypherQAChain
 from langchain_community.vectorstores.neo4j_vector import Neo4jVector
 from langchain_core.messages import AnyMessage, HumanMessage, AIMessage
 from src.utils.prompt_utils import(
@@ -21,14 +24,6 @@ from src.utils.prompt_utils import(
     General_Instructions,
     cypher_generation_template,
     qa_generation_template_str)
-
-
-from langchain.prompts import (
-    PromptTemplate
-)
-
-from langchain_community.graphs import Neo4jGraph
-from langchain.chains import GraphCypherQAChain
 
 load_dotenv()
 
@@ -142,7 +137,6 @@ def graph_tool(query: str) -> str:
     Always prefer this tool if the user query involves understanding structured workflows, responsibilities or control frameworks within a business process.
 	"""
     response = cypher_chain.invoke(query)
-
     return response.get("result")
 
 
