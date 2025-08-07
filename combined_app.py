@@ -17,9 +17,12 @@ async def on_message(msg: cl.Message):
         answer_prefix_tokens=answer_prefix_tokens,)
     final_answer = cl.Message(content="")
     question = msg.content
+    history = cl.user_session.get("history", [])
     inputs = {
-        "question": msg.content
+        "question": question,
+        "conversation_history": history
     }
+    history.append({"role": "user", "content": question})
     builder = _create_graph_builder()
     buffer = ""
     streaming = False
@@ -28,7 +31,6 @@ async def on_message(msg: cl.Message):
         async for msg, metadata in graph_with_memory.astream(inputs,
                                                               stream_mode="messages",
                                                               config=RunnableConfig(callbacks=[cb], **config)):
-            identifier = metadata.get("langgraph_node")
             content = msg.content
             print(f"----------{content}")
             if not streaming:
@@ -44,16 +46,5 @@ async def on_message(msg: cl.Message):
             if content == question:
                 continue
             await final_answer.stream_token(content)
-
+    history.append({"role": "assistant", "content": final_answer})
     await final_answer.send()
-
-    # thread = {"configurable": {"thread_id": 141}}
-    # with SqliteSaver.from_conn_string(":memory:") as memory:
-    #     graph_with_memory = builder.compile(checkpointer=memory)
-    #     for output in graph_with_memory.stream(inputs, thread):
-    #         print(output)
-    #         if 'web_answer_node' in output:
-    #             print("======================= SUCCESS =============")
-    #             await final_answer.stream_token(output["web_answer_node"]["final_answer"])
-    #
-    # await final_answer.send()

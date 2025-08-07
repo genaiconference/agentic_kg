@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 from langchain.tools import tool
 from langgraph.graph import StateGraph
 from typing_extensions import TypedDict
-from langchain_openai import AzureChatOpenAI
-from langchain_openai import AzureOpenAIEmbeddings
+from langchain_openai import ChatOpenAI
+from langchain_openai import OpenAIEmbeddings
 from src.utils.agentic_utils import get_react_agent
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain.tools.retriever import create_retriever_tool
@@ -38,42 +38,36 @@ API_VERSION = os.getenv("API_VERSION")
 DEPLOYMENT_NAME = os.getenv("DEPLOYMENT_NAME")
 EMBEDDING_DEPLOYMENT_NAME = os.getenv("EMBEDDING_DEPLOYMENT_NAME")
 API_KEY = os.getenv("API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 NEO4J_URI = os.getenv("NEO4J_URI")
 NEO4J_USER = os.getenv("NEO4J_USERNAME")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
 
-llm = AzureChatOpenAI(
-    azure_endpoint=API_BASE,
-    openai_api_version=API_VERSION,
-    deployment_name=DEPLOYMENT_NAME,
-    openai_api_key=API_KEY,
-    openai_api_type="azure",
-    streaming=True,
-    temperature=0
+
+embedding_model = OpenAIEmbeddings(
+    model=EMBEDDING_DEPLOYMENT_NAME
 )
 
-embedding_model = AzureOpenAIEmbeddings(
-    azure_deployment=EMBEDDING_DEPLOYMENT_NAME,
-    openai_api_key=API_KEY,
-    azure_endpoint=API_BASE,
-    openai_api_version=API_VERSION,
-)
+llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, model=DEPLOYMENT_NAME, temperature=0)
+
 
 #--------------------Insurance & Leave Policy----------------------------#
 # 🔹 Common splitter
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 
-# 🔸 Leave Policy
-leave_file_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'LEAVE POLICY v9.pdf')
+# # 🔸 Leave Policy
+# leave_file_path = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'LEAVE POLICY v9.pdf')
+#
+# leave_docs = PyPDFLoader(leave_file_path).load()
+# leave_chunks = text_splitter.split_documents(leave_docs)
+# leave_vs = Chroma.from_documents(
+#     documents=leave_chunks,
+#     embedding=embedding_model,
+#     persist_directory="chroma_leave_policy"
+# )
+leave_vs = Chroma(persist_directory="./chroma_leave_policy", embedding_function=embedding_model)
 
-leave_docs = PyPDFLoader(leave_file_path).load()
-leave_chunks = text_splitter.split_documents(leave_docs)
-leave_vs = Chroma.from_documents(
-    documents=leave_chunks,
-    embedding=embedding_model,
-    persist_directory="chroma_leave_policy"
-)
 leave_retriever = leave_vs.as_retriever(search_kwargs={"k": 4})
 leave_policy_tool = create_retriever_tool(
     retriever=leave_retriever,
@@ -81,15 +75,17 @@ leave_policy_tool = create_retriever_tool(
     description="Use this tool to answer questions specifically about the company's leave policy"
 )
 
-# 🔸 Health Insurance
-insurance_file_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'insurance_pdf.pdf')
-health_docs = PyPDFLoader(insurance_file_path).load()
-health_chunks = text_splitter.split_documents(health_docs)
-health_vs = Chroma.from_documents(
-    documents=health_chunks,
-    embedding=embedding_model,
-    persist_directory="chroma_health_insurance"
-)
+# # 🔸 Health Insurance
+# insurance_file_path = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'insurance_pdf.pdf')
+# health_docs = PyPDFLoader(insurance_file_path).load()
+# health_chunks = text_splitter.split_documents(health_docs)
+# health_vs = Chroma.from_documents(
+#     documents=health_chunks,
+#     embedding=embedding_model,
+#     persist_directory="chroma_health_insurance"
+# )
+health_vs = Chroma(persist_directory="./chroma_health_insurance", embedding_function=embedding_model)
+
 health_retriever = health_vs.as_retriever(search_kwargs={"k": 4})
 health_insurance_tool = create_retriever_tool(
     retriever=health_retriever,

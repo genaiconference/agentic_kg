@@ -8,12 +8,16 @@ from langchain.tools import tool
 from langgraph.graph import StateGraph
 from typing_extensions import TypedDict
 from langchain_openai import AzureChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain_openai import AzureOpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from src.utils.agentic_utils import get_react_agent
 from langchain_community.callbacks import get_openai_callback
 from langchain.tools import Tool
 from neo4j_graphrag.schema import get_schema
 from neo4j_graphrag.llm import AzureOpenAILLM
+from neo4j_graphrag.llm import OpenAILLM
+
 from neo4j_graphrag.retrievers import HybridCypherRetriever, Text2CypherRetriever
 from neo4j_graphrag.types import RetrieverResultItem
 from neo4j_graphrag.generation import GraphRAG, RagTemplate
@@ -32,38 +36,22 @@ API_VERSION = os.getenv("API_VERSION")
 DEPLOYMENT_NAME = os.getenv("DEPLOYMENT_NAME")
 EMBEDDING_DEPLOYMENT_NAME = os.getenv("EMBEDDING_DEPLOYMENT_NAME")
 API_KEY = os.getenv("API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 NEO4J_URI = os.getenv("AV_NEO4J_URI")
 NEO4J_USER = os.getenv("AV_NEO4J_USERNAME")
 NEO4J_PASSWORD = os.getenv("AV_NEO4J_PASSWORD")
 
-neo4j_answering_llm = AzureOpenAILLM(
-    model_name=DEPLOYMENT_NAME,
-    model_params={
-        "temperature": 0,  # for deterministic output (optional)
-    },
-    azure_endpoint=API_BASE,
-    api_version=API_VERSION,
-    api_key=API_KEY
+neo4j_answering_llm = OpenAILLM(
+    model=DEPLOYMENT_NAME,
+    api_key=OPENAI_API_KEY
 )
 
-neo4j_embedder = AzureOpenAIEmbeddings(
-    model=EMBEDDING_DEPLOYMENT_NAME,
-    api_key=API_KEY,
-    azure_endpoint=API_BASE,
-    api_version=API_VERSION,
-    azure_deployment=EMBEDDING_DEPLOYMENT_NAME
+neo4j_embedder = OpenAIEmbeddings(
+    model=EMBEDDING_DEPLOYMENT_NAME
 )
 
-lang_llm = AzureChatOpenAI(
-    azure_endpoint=API_BASE,
-    openai_api_version=API_VERSION,
-    deployment_name=DEPLOYMENT_NAME,
-    openai_api_key=API_KEY,
-    openai_api_type="azure",
-    streaming=True,
-    temperature=0
-)
+lang_llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, model=DEPLOYMENT_NAME, temperature=0)
 
 class GraphState(TypedDict):
     question: str
